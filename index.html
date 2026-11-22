@@ -3,15 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#7a4a24">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Zoya Worker">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Zoya Crystal Worker</title>
 <style>
-:root{--bg:#f4f6fb;--card:#fff;--ink:#1c2333;--mute:#667085;--pri:#4f46e5;--ok:#16a34a;--bad:#dc2626;--line:#e4e7ee}
+:root{--bg:#faf6ee;--card:#fffdf8;--ink:#2b1f14;--mute:#7d6c58;--pri:#7a4a24;--ok:#4a6b2a;--bad:#b3261e;--line:#eadfc9}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);font-size:15px}
-header{background:var(--pri);color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:5}
+header{background:linear-gradient(135deg,#7a4a24,#a0693a);color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:5}
 header b{font-size:16px}header small{opacity:.85;display:block;font-size:12px}
 header button{background:rgba(255,255,255,.18);color:#fff;border:0;padding:8px 12px;border-radius:8px}
-nav{display:flex;gap:6px;overflow-x:auto;padding:10px 12px;background:#fff;border-bottom:1px solid var(--line)}
+nav{display:flex;gap:6px;overflow-x:auto;padding:10px 12px;background:#fffdf8;border-bottom:1px solid var(--line)}
 nav button{white-space:nowrap;border:1px solid var(--line);background:#fff;padding:8px 14px;border-radius:20px;font-size:14px}
 nav button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
 main{max-width:900px;margin:0 auto;padding:12px}
@@ -22,16 +30,18 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
 .row{display:flex;gap:8px}.row>*{flex:1}
 .btn{background:var(--pri);color:#fff;border:0;padding:12px;border-radius:8px;font-size:16px;width:100%;margin-top:12px}
 .btn.sm{width:auto;padding:6px 10px;font-size:13px;margin:0}
-.btn.red{background:var(--bad)}.btn.gray{background:#6b7280}
+.btn.red{background:var(--bad)}.btn.gray{background:#9a8466}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:7px 5px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 th{color:var(--mute);font-weight:600;font-size:12px}
 .wrap{overflow-x:auto}
 .pos{color:var(--ok);font-weight:600}.neg{color:var(--bad);font-weight:600}
 .mute{color:var(--mute);font-size:12px}
-.login{max-width:380px;margin:12vh auto;padding:0 14px}
+.login{max-width:380px;margin:6vh auto;padding:0 14px}
+.login .logo{display:block;width:150px;height:150px;margin:0 auto 14px}
+.hl{display:flex;align-items:center;gap:10px}.hl img{width:40px;height:40px;border-radius:50%;background:#fff}
 .err{color:var(--bad);font-size:13px;margin-top:8px}
-.tot{background:#eef2ff}
+.tot{background:#f5ead4}
 .sub{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
 .sub .hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:20}
@@ -58,6 +68,7 @@ const ADMIN_EMAIL = "aksatmansuri2005@gmail.com";
 const UNITS = { piece: "Piece", gram: "Gram", kg: "KG" };
 const UNIT_OPTS = [["piece", "Piece"], ["gram", "Gram"], ["kg", "KG"]];
 
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -152,7 +163,7 @@ onAuthStateChanged(auth, u => {
 
 function renderLogin() {
   $("#app").innerHTML = `
-  <div class="login"><div class="card">
+  <div class="login"><img class="logo" src="logo.png" alt="Zoya Crystal and Export"><div class="card">
     <h3>Zoya Crystal Worker</h3>
     <p class="mute">Apna email aur password daalein</p>
     <label>Email</label><input id="em" type="email" autocomplete="username">
@@ -177,7 +188,7 @@ function tabs() {
 
 function renderShell() {
   $("#app").innerHTML = `
-  <header><div><b>Zoya Crystal Worker</b><small>${esc(user.email)} · ${isAdmin ? "Admin" : "Staff"}</small></div><button id="lo">Logout</button></header>
+  <header><div class="hl"><img src="logo.png" alt=""><div><b>Zoya Crystal Worker</b><small>${esc(user.email)} · ${isAdmin ? "Admin" : "Staff"}</small></div></div><button id="lo">Logout</button></header>
   <nav id="nav"></nav><main id="main"></main>`;
   $("#lo").onclick = () => signOut(auth);
   renderTab();
