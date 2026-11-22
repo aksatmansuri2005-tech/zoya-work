@@ -32,6 +32,10 @@ th{color:var(--mute);font-weight:600;font-size:12px}
 .login{max-width:380px;margin:12vh auto;padding:0 14px}
 .err{color:var(--bad);font-size:13px;margin-top:8px}
 .tot{background:#eef2ff}
+.sub{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+.sub .hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:20}
+.modal .box{background:#fff;width:100%;max-width:500px;border-radius:16px 16px 0 0;padding:16px;max-height:90vh;overflow:auto}
 </style>
 </head>
 <body>
@@ -40,7 +44,7 @@ th{color:var(--mute);font-weight:600;font-size:12px}
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, addDoc, setDoc, doc, onSnapshot, deleteDoc, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, addDoc, setDoc, doc, onSnapshot, deleteDoc, updateDoc, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAqCAw6lMir4FKiNXt-jpzzzq6ZuJ4cqyY",
@@ -52,6 +56,7 @@ const firebaseConfig = {
 };
 const ADMIN_EMAIL = "aksatmansuri2005@gmail.com";
 const UNITS = { piece: "Piece", gram: "Gram", kg: "KG" };
+const UNIT_OPTS = [["piece", "Piece"], ["gram", "Gram"], ["kg", "KG"]];
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -63,11 +68,50 @@ const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOff
 const fmt = n => (Math.round(Number(n || 0) * 100) / 100).toLocaleString("en-IN");
 const money = n => "₹" + fmt(n);
 const sum = (a, k) => a.reduce((t, x) => t + Number(x[k] || 0), 0);
-const unitOf = w => UNITS[w?.unit] || "";
+const rid = () => "w" + Math.random().toString(36).slice(2, 8);
 
 let user = null, isAdmin = false, tab = "entry";
 let workers = [], rates = {}, entries = [], payments = [], unsubs = [];
 
+/* ---- karigar / kaam helpers ---- */
+const worksOf = w => (w.works && w.works.length) ? w.works : [{ id: "default", name: "Kaam", unit: w.unit || "piece" }];
+const workOf = (w, id) => worksOf(w).find(x => x.id === (id || "default"));
+const unitName = u => UNITS[u] || "";
+const rateOf = (workerId, workId) => {
+  const r = rates[workerId]; if (!r) return 0;
+  if (r.map) return Number(r.map[workId || "default"] || 0);
+  return (workId || "default") === "default" ? Number(r.rate || 0) : 0;
+};
+const mapOf = w => {
+  const r = rates[w.id] || {};
+  return r.map ? { ...r.map } : (r.rate != null ? { default: Number(r.rate) } : {});
+};
+const workerOf = id => workers.find(x => x.id === id);
+const entryWorkName = e => { const w = workerOf(e.workerId); return (w && workOf(w, e.workId)?.name) || e.workName || ""; };
+const entryUnit = e => { const w = workerOf(e.workerId); return unitName(e.unit || (w && workOf(w, e.workId)?.unit)); };
+const entryWorker = e => workerOf(e.workerId)?.name || e.workerName || "";
+
+async function saveWorks(w, works, map) {
+  await updateDoc(doc(db, "workers", w.id), { works });
+  await setDoc(doc(db, "rates", w.id), { map });
+}
+
+/* ---- modal ---- */
+function modal(title, fields, onSave) {
+  const m = document.createElement("div"); m.className = "modal";
+  m.innerHTML = `<div class="box"><h3>${esc(title)}</h3>` + fields.map(f => {
+    if (f.type === "select") return `<label>${esc(f.label)}</label><select data-k="${f.k}">${f.options.map(([v, l]) => `<option value="${esc(v)}" ${v === f.value ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    return `<label>${esc(f.label)}</label><input data-k="${f.k}" type="${f.type || "text"}" ${f.type === "number" ? 'inputmode="decimal" min="0" step="any"' : ""} value="${esc(f.value ?? "")}">`;
+  }).join("") + `<div class="row"><button class="btn gray" id="mc">Cancel</button><button class="btn" id="ms">Save</button></div><div class="err" id="me"></div></div>`;
+  document.body.appendChild(m);
+  m.querySelector("#mc").onclick = () => m.remove();
+  m.querySelector("#ms").onclick = async () => {
+    const v = {}; m.querySelectorAll("input,select").forEach(i => v[i.dataset.k] = i.value);
+    try { await onSave(v); m.remove(); } catch (e) { m.querySelector("#me").textContent = e.message; }
+  };
+}
+
+/* ---- firestore listeners ---- */
 function stopListening() { unsubs.forEach(u => u()); unsubs = []; }
 function listen() {
   stopListening();
@@ -82,7 +126,7 @@ function listen() {
   }, err));
   if (isAdmin) {
     unsubs.push(onSnapshot(collection(db, "rates"), s => {
-      rates = {}; s.docs.forEach(d => rates[d.id] = Number(d.data().rate || 0));
+      rates = {}; s.docs.forEach(d => rates[d.id] = d.data());
       refresh();
     }, err));
     unsubs.push(onSnapshot(query(collection(db, "payments"), orderBy("date", "desc")), s => {
@@ -148,6 +192,7 @@ function renderTab() {
     <div class="card"><h3>Naya entry</h3>
       <label>Tarikh</label><input id="d" type="date" value="${today()}">
       <label>Karigar</label><select id="w"></select>
+      <label>Kaam / Rate</label><select id="k"></select>
       <div class="row">
         <div><label>Maal diya <span id="u1" class="mute"></span></label><input id="g" type="number" inputmode="decimal" min="0" step="any" placeholder="0"></div>
         <div><label>Complete hua <span id="u2" class="mute"></span></label><input id="c" type="number" inputmode="decimal" min="0" step="any" placeholder="0"></div>
@@ -157,11 +202,13 @@ function renderTab() {
       <div class="err" id="er"></div>
     </div>
     <div class="card"><h3>Aaj ke entries</h3><div id="dyn"></div></div>`;
-    $("#w").onchange = updUnit;
+    $("#w").onchange = () => { fillWorks(); };
+    $("#k").onchange = updUnit;
     $("#save").onclick = saveEntry;
   } else if (tab === "summary") {
     m.innerHTML = `
-    <div class="card"><h3>Karigar-wise hisaab</h3><div id="dyn"></div></div>
+    <h3 style="margin:4px 2px 8px">Karigar-wise hisaab</h3>
+    <div id="dyn"></div>
     <div class="card"><h3>Daily report</h3>
       <label>Tarikh</label><input id="rd" type="date" value="${today()}">
       <div id="dyn2" style="margin-top:10px"></div></div>`;
@@ -175,13 +222,15 @@ function renderTab() {
   } else if (tab === "workers" && isAdmin) {
     m.innerHTML = `
     <div class="card"><h3>Naya karigar jodein</h3>
-      <label>Naam</label><input id="wn" type="text">
+      <label>Karigar ka naam</label><input id="wn" type="text">
+      <label>Pehla kaam ka naam (optional)</label><input id="wk" type="text" placeholder="jaise: Cutting">
       <div class="row">
-        <div><label>Unit</label><select id="wu"><option value="piece">Piece</option><option value="gram">Gram</option><option value="kg">KG</option></select></div>
+        <div><label>Unit</label><select id="wu">${UNIT_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
         <div><label>Rate (₹ per unit)</label><input id="wr" type="number" inputmode="decimal" min="0" step="any"></div>
       </div>
-      <button class="btn" id="addw">Jodein</button><div class="err" id="er"></div></div>
-    <div class="card"><h3>Karigar list</h3><div id="dyn"></div></div>`;
+      <button class="btn" id="addw">Jodein</button><div class="err" id="er"></div>
+      <p class="mute">Karigar sirf ek baar add karna hai. Alag rate ke liye neeche list mein karigar ke andar <b>+ Naya kaam / rate</b> dabayein.</p></div>
+    <div id="dyn"></div>`;
     $("#addw").onclick = addWorker;
   } else if (tab === "pay" && isAdmin) {
     m.innerHTML = `
@@ -200,89 +249,195 @@ function renderTab() {
 function opts(sel, all) {
   const cur = sel.value;
   sel.innerHTML = (all ? `<option value="">Sabhi karigar</option>` : `<option value="">-- chunein --</option>`) +
-    workers.map(w => `<option value="${w.id}">${esc(w.name)} (${unitOf(w)})</option>`).join("");
+    workers.map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
 }
+
+function fillWorks() {
+  const w = workerOf($("#w").value), k = $("#k"), cur = k.value;
+  if (!w) { k.innerHTML = `<option value="">-- pehle karigar chunein --</option>`; updUnit(); return; }
+  k.innerHTML = worksOf(w).map(x => `<option value="${esc(x.id)}">${esc(x.name)} (${unitName(x.unit)})${isAdmin ? " – " + money(rateOf(w.id, x.id)) : ""}</option>`).join("");
+  if ([...k.options].some(o => o.value === cur)) k.value = cur;
+  updUnit();
+}
 function updUnit() {
-  const w = workers.find(x => x.id === $("#w").value);
-  const u = w ? "(" + unitOf(w) + ")" : "";
+  const w = workerOf($("#w").value), wk = w && workOf(w, $("#k").value);
+  const u = wk ? "(" + unitName(wk.unit) + ")" : "";
   if ($("#u1")) { $("#u1").textContent = u; $("#u2").textContent = u; }
 }
 
-function stats() {
-  return workers.map(w => {
-    const es = entries.filter(e => e.workerId === w.id);
-    const given = sum(es, "given"), done = sum(es, "completed");
-    const rate = Number(rates[w.id] || 0);
-    const earned = done * rate;
-    const paid = payments.filter(p => p.workerId === w.id).reduce((t, p) => t + Number(p.amount || 0), 0);
-    return { w, given, done, left: given - done, rate, earned, paid, bal: earned - paid };
+/* ---- hisaab ---- */
+function statsFor(w) {
+  const mine = entries.filter(e => e.workerId === w.id);
+  const rows = worksOf(w).map(wk => {
+    const es = mine.filter(e => (e.workId || "default") === wk.id);
+    const given = sum(es, "given"), done = sum(es, "completed"), rate = rateOf(w.id, wk.id);
+    return { name: wk.name, unit: wk.unit, given, done, left: given - done, rate, earned: done * rate };
   });
+  const known = new Set(worksOf(w).map(x => x.id));
+  const orphan = {};
+  mine.filter(e => !known.has(e.workId || "default")).forEach(e => {
+    const k = e.workId || "default"; orphan[k] = orphan[k] || { name: (e.workName || "Purana kaam") + " (hata diya)", unit: e.unit, given: 0, done: 0, rate: 0, earned: 0 };
+    orphan[k].given += Number(e.given || 0); orphan[k].done += Number(e.completed || 0);
+  });
+  Object.values(orphan).forEach(o => { o.left = o.given - o.done; rows.push(o); });
+  const earned = sum(rows, "earned");
+  const paid = payments.filter(p => p.workerId === w.id).reduce((t, p) => t + Number(p.amount || 0), 0);
+  return { rows, earned, paid, bal: earned - paid };
 }
 
 function entryTable(list, withDel) {
   if (!list.length) return `<p class="mute">Abhi koi entry nahi.</p>`;
-  return `<div class="wrap"><table><tr><th>Tarikh</th><th>Karigar</th><th>Diya</th><th>Complete</th><th>Note</th>${withDel ? "<th></th>" : ""}</tr>` +
-    list.map(e => `<tr><td>${esc(e.date)}</td><td>${esc(e.workerName)}</td><td>${fmt(e.given)} ${esc(UNITS[e.unit] || "")}</td><td>${fmt(e.completed)} ${esc(UNITS[e.unit] || "")}</td><td>${esc(e.note || "")}<div class="mute">${esc((e.by || "").split("@")[0])}</div></td>${withDel ? `<td><button class="btn sm red" data-del="${e.id}">X</button></td>` : ""}</tr>`).join("") +
+  return `<div class="wrap"><table><tr><th>Tarikh</th><th>Karigar</th><th>Kaam</th><th>Diya</th><th>Complete</th><th>Note</th>${withDel ? "<th></th>" : ""}</tr>` +
+    list.map(e => `<tr><td>${esc(e.date)}</td><td>${esc(entryWorker(e))}</td><td>${esc(entryWorkName(e))}</td><td>${fmt(e.given)} ${esc(entryUnit(e))}</td><td>${fmt(e.completed)} ${esc(entryUnit(e))}</td><td>${esc(e.note || "")}<div class="mute">${esc((e.by || "").split("@")[0])}</div></td>${withDel ? `<td><button class="btn sm gray" data-edit="${e.id}">Edit</button> <button class="btn sm red" data-del="${e.id}">X</button></td>` : ""}</tr>`).join("") +
     `</table></div>`;
+}
+
+function bindEntry(root) {
+  root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    if (confirm("Ye entry delete karein?")) { try { await deleteDoc(doc(db, "entries", b.dataset.del)); } catch (e) { alert("Delete nahi hua: " + e.message); } }
+  });
+  root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    const e = entries.find(x => x.id === b.dataset.edit); if (!e) return;
+    const w = workerOf(e.workerId);
+    const fields = [{ k: "date", label: "Tarikh", type: "date", value: e.date }];
+    if (w) fields.push({ k: "work", label: "Kaam / Rate", type: "select", value: e.workId || "default", options: worksOf(w).map(x => [x.id, `${x.name} (${unitName(x.unit)})`]) });
+    fields.push(
+      { k: "given", label: "Maal diya", type: "number", value: e.given },
+      { k: "completed", label: "Complete hua", type: "number", value: e.completed },
+      { k: "note", label: "Note", value: e.note || "" });
+    modal("Entry edit karein", fields, async v => {
+      const g = Number(v.given || 0), c = Number(v.completed || 0);
+      if (!v.date) throw new Error("Tarikh daalein");
+      if (g < 0 || c < 0 || (g === 0 && c === 0)) throw new Error("Maal diya ya complete hua daalein");
+      const upd = { date: v.date, given: g, completed: c, note: v.note.trim() };
+      if (w && v.work) { const wk = workOf(w, v.work); upd.workId = wk.id; upd.workName = wk.name; upd.unit = wk.unit; }
+      await updateDoc(doc(db, "entries", e.id), upd);
+    });
+  });
 }
 
 function refresh() {
   if (!user || !$("#main")) return;
   if (tab === "entry") {
-    opts($("#w")); updUnit();
-    $("#dyn").innerHTML = entryTable(entries.filter(e => e.date === today()), false);
+    opts($("#w")); fillWorks();
+    $("#dyn").innerHTML = entryTable(entries.filter(e => e.date === today()), isAdmin);
+    bindEntry($("#dyn"));
   } else if (tab === "summary") {
-    const st = stats();
-    if (!st.length) { $("#dyn").innerHTML = `<p class="mute">Abhi koi karigar nahi.</p>`; }
+    if (!workers.length) $("#dyn").innerHTML = `<div class="card"><p class="mute">Abhi koi karigar nahi.</p></div>`;
     else {
-      let h = `<div class="wrap"><table><tr><th>Karigar</th><th>Diya</th><th>Complete</th><th>Baaki kaam</th>${isAdmin ? "<th>Rate</th><th>Kamayi</th><th>Diya gaya</th><th>Baaki payment</th>" : ""}</tr>`;
-      h += st.map(s => `<tr><td>${esc(s.w.name)}<div class="mute">${unitOf(s.w)}</div></td><td>${fmt(s.given)}</td><td>${fmt(s.done)}</td><td class="${s.left > 0 ? "neg" : "pos"}">${fmt(s.left)}</td>${isAdmin ? `<td>${money(s.rate)}</td><td>${money(s.earned)}</td><td>${money(s.paid)}</td><td class="${s.bal > 0 ? "neg" : "pos"}">${money(s.bal)}</td>` : ""}</tr>`).join("");
-      if (isAdmin) h += `<tr class="tot"><td colspan="5"><b>Total</b></td><td><b>${money(sum(st, "earned"))}</b></td><td><b>${money(sum(st, "paid"))}</b></td><td><b>${money(sum(st, "bal"))}</b></td></tr>`;
-      $("#dyn").innerHTML = h + `</table></div>` + (isAdmin ? `<p class="mute">Baaki payment = Kamayi (complete × rate) − Diya gaya payment</p>` : "");
+      let all = { earned: 0, paid: 0, bal: 0 };
+      $("#dyn").innerHTML = workers.map(w => {
+        const s = statsFor(w); all.earned += s.earned; all.paid += s.paid; all.bal += s.bal;
+        let h = `<div class="card"><h3>${esc(w.name)}</h3><div class="wrap"><table><tr><th>Kaam</th><th>Diya</th><th>Complete</th><th>Baaki</th>${isAdmin ? "<th>Rate</th><th>Kamayi</th>" : ""}</tr>`;
+        h += s.rows.map(r => `<tr><td>${esc(r.name)}<div class="mute">${unitName(r.unit)}</div></td><td>${fmt(r.given)}</td><td>${fmt(r.done)}</td><td class="${r.left > 0 ? "neg" : "pos"}">${fmt(r.left)}</td>${isAdmin ? `<td>${money(r.rate)}</td><td>${money(r.earned)}</td>` : ""}</tr>`).join("");
+        if (isAdmin) h += `<tr class="tot"><td colspan="5"><b>Kul kamayi</b></td><td><b>${money(s.earned)}</b></td></tr><tr><td colspan="5">Diya gaya payment</td><td>${money(s.paid)}</td></tr><tr class="tot"><td colspan="5"><b>Baaki payment</b></td><td class="${s.bal > 0 ? "neg" : "pos"}"><b>${money(s.bal)}</b></td></tr>`;
+        return h + `</table></div></div>`;
+      }).join("") + (isAdmin ? `<div class="card tot"><h3>Sabhi karigar ka total</h3><table><tr><td>Kul kamayi</td><td><b>${money(all.earned)}</b></td></tr><tr><td>Diya gaya</td><td><b>${money(all.paid)}</b></td></tr><tr><td>Baaki payment</td><td><b>${money(all.bal)}</b></td></tr></table></div>` : "");
     }
     const d = $("#rd").value;
     const es = entries.filter(e => e.date === d);
     if (!es.length) $("#dyn2").innerHTML = `<p class="mute">${esc(d)} ko koi entry nahi.</p>`;
     else {
       const by = {};
-      es.forEach(e => { const k = e.workerId; by[k] = by[k] || { name: e.workerName, unit: e.unit, g: 0, c: 0 }; by[k].g += Number(e.given || 0); by[k].c += Number(e.completed || 0); });
-      let t = `<div class="wrap"><table><tr><th>Karigar</th><th>Diya</th><th>Complete</th>${isAdmin ? "<th>Kamayi</th>" : ""}</tr>`;
-      let total = 0;
-      Object.entries(by).forEach(([id, r]) => {
-        const earn = r.c * Number(rates[id] || 0); total += earn;
-        t += `<tr><td>${esc(r.name)}</td><td>${fmt(r.g)} ${esc(UNITS[r.unit] || "")}</td><td>${fmt(r.c)} ${esc(UNITS[r.unit] || "")}</td>${isAdmin ? `<td>${money(earn)}</td>` : ""}</tr>`;
+      es.forEach(e => {
+        const k = e.workerId + "|" + (e.workId || "default");
+        by[k] = by[k] || { worker: entryWorker(e), work: entryWorkName(e), unit: entryUnit(e), wid: e.workerId, kid: e.workId || "default", g: 0, c: 0 };
+        by[k].g += Number(e.given || 0); by[k].c += Number(e.completed || 0);
       });
-      if (isAdmin) t += `<tr class="tot"><td colspan="3"><b>Din ka total</b></td><td><b>${money(total)}</b></td></tr>`;
+      let t = `<div class="wrap"><table><tr><th>Karigar</th><th>Kaam</th><th>Diya</th><th>Complete</th>${isAdmin ? "<th>Kamayi</th>" : ""}</tr>`, total = 0;
+      Object.values(by).forEach(r => {
+        const earn = r.c * rateOf(r.wid, r.kid); total += earn;
+        t += `<tr><td>${esc(r.worker)}</td><td>${esc(r.work)}</td><td>${fmt(r.g)} ${esc(r.unit)}</td><td>${fmt(r.c)} ${esc(r.unit)}</td>${isAdmin ? `<td>${money(earn)}</td>` : ""}</tr>`;
+      });
+      if (isAdmin) t += `<tr class="tot"><td colspan="4"><b>Din ka total</b></td><td><b>${money(total)}</b></td></tr>`;
       $("#dyn2").innerHTML = t + `</table></div>`;
     }
   } else if (tab === "history") {
     opts($("#hf"), true);
     const f = $("#hf").value;
     $("#dyn").innerHTML = entryTable(entries.filter(e => !f || e.workerId === f), isAdmin);
-    $("#dyn").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-      if (confirm("Ye entry delete karein?")) { try { await deleteDoc(doc(db, "entries", b.dataset.del)); } catch (e) { alert("Delete nahi hua: " + e.message); } }
-    });
+    bindEntry($("#dyn"));
   } else if (tab === "workers") {
-    if (!workers.length) $("#dyn").innerHTML = `<p class="mute">Abhi koi karigar nahi.</p>`;
-    else {
-      $("#dyn").innerHTML = `<div class="wrap"><table><tr><th>Naam</th><th>Unit</th><th>Rate</th><th></th></tr>` +
-        workers.map(w => `<tr><td>${esc(w.name)}</td><td>${unitOf(w)}</td><td>${money(rates[w.id])}</td><td><button class="btn sm gray" data-rate="${w.id}">Rate</button> <button class="btn sm red" data-rm="${w.id}">X</button></td></tr>`).join("") + `</table></div>`;
-      $("#dyn").querySelectorAll("[data-rate]").forEach(b => b.onclick = async () => {
-        const v = prompt("Naya rate (₹ per unit):", rates[b.dataset.rate] || "");
-        if (v === null) return;
-        const n = Number(v); if (isNaN(n) || n < 0) return alert("Sahi rate daalein");
-        try { await setDoc(doc(db, "rates", b.dataset.rate), { rate: n }); } catch (e) { alert(e.message); }
+    if (!workers.length) { $("#dyn").innerHTML = `<div class="card"><p class="mute">Abhi koi karigar nahi.</p></div>`; return; }
+    $("#dyn").innerHTML = workers.map(w => `
+      <div class="card">
+        <div class="hd" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <h3 style="margin:0">${esc(w.name)}</h3>
+          <div><button class="btn sm gray" data-wn="${w.id}">Naam</button> <button class="btn sm red" data-wrm="${w.id}">X</button></div>
+        </div>
+        <div class="wrap"><table><tr><th>Kaam</th><th>Unit</th><th>Rate</th><th></th></tr>
+        ${worksOf(w).map(x => `<tr><td>${esc(x.name)}</td><td>${unitName(x.unit)}</td><td>${money(rateOf(w.id, x.id))}</td><td><button class="btn sm gray" data-we="${w.id}|${x.id}">Edit</button> <button class="btn sm red" data-wd="${w.id}|${x.id}">X</button></td></tr>`).join("")}
+        </table></div>
+        <button class="btn sm" style="margin-top:10px" data-add="${w.id}">+ Naya kaam / rate</button>
+      </div>`).join("");
+    const R = $("#dyn");
+    R.querySelectorAll("[data-wn]").forEach(b => b.onclick = () => {
+      const w = workerOf(b.dataset.wn);
+      modal("Karigar ka naam", [{ k: "name", label: "Naam", value: w.name }], async v => {
+        if (!v.name.trim()) throw new Error("Naam daalein");
+        await updateDoc(doc(db, "workers", w.id), { name: v.name.trim() });
       });
-      $("#dyn").querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
-        if (confirm("Karigar hatayein? Purani entries rahengi.")) { try { await deleteDoc(doc(db, "workers", b.dataset.rm)); await deleteDoc(doc(db, "rates", b.dataset.rm)); } catch (e) { alert(e.message); } }
+    });
+    R.querySelectorAll("[data-wrm]").forEach(b => b.onclick = async () => {
+      if (confirm("Karigar hatayein? Purani entries rahengi.")) { try { await deleteDoc(doc(db, "workers", b.dataset.wrm)); await deleteDoc(doc(db, "rates", b.dataset.wrm)); } catch (e) { alert(e.message); } }
+    });
+    R.querySelectorAll("[data-add]").forEach(b => b.onclick = () => {
+      const w = workerOf(b.dataset.add);
+      modal("Naya kaam / rate", [
+        { k: "name", label: "Kaam ka naam", value: "" },
+        { k: "unit", label: "Unit", type: "select", value: "piece", options: UNIT_OPTS },
+        { k: "rate", label: "Rate (₹ per unit)", type: "number", value: "" }
+      ], async v => {
+        const r = Number(v.rate || 0);
+        if (!v.name.trim()) throw new Error("Kaam ka naam daalein");
+        if (r < 0) throw new Error("Sahi rate daalein");
+        const works = worksOf(w).map(x => ({ ...x })), map = mapOf(w);
+        const id = rid(); works.push({ id, name: v.name.trim(), unit: v.unit }); map[id] = r;
+        await saveWorks(w, works, map);
       });
-    }
+    });
+    R.querySelectorAll("[data-we]").forEach(b => b.onclick = () => {
+      const [wid, kid] = b.dataset.we.split("|"), w = workerOf(wid), wk = workOf(w, kid);
+      modal("Kaam / rate edit karein", [
+        { k: "name", label: "Kaam ka naam", value: wk.name },
+        { k: "rate", label: "Rate (₹ per " + unitName(wk.unit) + ")", type: "number", value: rateOf(wid, kid) }
+      ], async v => {
+        const r = Number(v.rate || 0);
+        if (!v.name.trim()) throw new Error("Kaam ka naam daalein");
+        if (r < 0) throw new Error("Sahi rate daalein");
+        const works = worksOf(w).map(x => x.id === kid ? { ...x, name: v.name.trim() } : { ...x }), map = mapOf(w);
+        map[kid] = r;
+        await saveWorks(w, works, map);
+      });
+    });
+    R.querySelectorAll("[data-wd]").forEach(b => b.onclick = async () => {
+      const [wid, kid] = b.dataset.wd.split("|"), w = workerOf(wid);
+      if (worksOf(w).length <= 1) return alert("Kam se kam ek kaam rehna chahiye.");
+      if (!confirm("Ye kaam / rate hatayein? Purani entries ka hisaab ₹0 dikhega.")) return;
+      try {
+        const works = worksOf(w).filter(x => x.id !== kid), map = mapOf(w); delete map[kid];
+        await saveWorks(w, works, map);
+      } catch (e) { alert(e.message); }
+    });
   } else if (tab === "pay") {
     opts($("#pw2"));
     $("#dyn").innerHTML = !payments.length ? `<p class="mute">Abhi koi payment nahi.</p>` :
       `<div class="wrap"><table><tr><th>Tarikh</th><th>Karigar</th><th>Amount</th><th>Note</th><th></th></tr>` +
-      payments.map(p => `<tr><td>${esc(p.date)}</td><td>${esc(p.workerName)}</td><td>${money(p.amount)}</td><td>${esc(p.note || "")}</td><td><button class="btn sm red" data-dp="${p.id}">X</button></td></tr>`).join("") + `</table></div>`;
+      payments.map(p => `<tr><td>${esc(p.date)}</td><td>${esc(workerOf(p.workerId)?.name || p.workerName)}</td><td>${money(p.amount)}</td><td>${esc(p.note || "")}</td><td><button class="btn sm gray" data-ep="${p.id}">Edit</button> <button class="btn sm red" data-dp="${p.id}">X</button></td></tr>`).join("") + `</table></div>`;
+    $("#dyn").querySelectorAll("[data-ep]").forEach(b => b.onclick = () => {
+      const p = payments.find(x => x.id === b.dataset.ep); if (!p) return;
+      modal("Payment edit karein", [
+        { k: "date", label: "Tarikh", type: "date", value: p.date },
+        { k: "amount", label: "Amount (₹)", type: "number", value: p.amount },
+        { k: "note", label: "Note", value: p.note || "" }
+      ], async v => {
+        const a = Number(v.amount || 0);
+        if (!v.date) throw new Error("Tarikh daalein");
+        if (!(a > 0)) throw new Error("Amount daalein");
+        await updateDoc(doc(db, "payments", p.id), { date: v.date, amount: a, note: v.note.trim() });
+      });
+    });
     $("#dyn").querySelectorAll("[data-dp]").forEach(b => b.onclick = async () => {
       if (confirm("Ye payment delete karein?")) { try { await deleteDoc(doc(db, "payments", b.dataset.dp)); } catch (e) { alert(e.message); } }
     });
@@ -291,13 +446,13 @@ function refresh() {
 
 async function saveEntry() {
   const er = $("#er"); er.textContent = "";
-  const w = workers.find(x => x.id === $("#w").value);
+  const w = workerOf($("#w").value), wk = w && workOf(w, $("#k").value);
   const g = Number($("#g").value || 0), c = Number($("#c").value || 0);
-  if (!w) return er.textContent = "Karigar chunein.";
+  if (!w || !wk) return er.textContent = "Karigar aur kaam chunein.";
   if (!$("#d").value) return er.textContent = "Tarikh chunein.";
   if (g < 0 || c < 0 || (g === 0 && c === 0)) return er.textContent = "Maal diya ya complete hua, kam se kam ek daalein.";
   try {
-    await addDoc(collection(db, "entries"), { date: $("#d").value, workerId: w.id, workerName: w.name, unit: w.unit, given: g, completed: c, note: $("#n").value.trim(), by: user.email, createdAt: serverTimestamp() });
+    await addDoc(collection(db, "entries"), { date: $("#d").value, workerId: w.id, workerName: w.name, workId: wk.id, workName: wk.name, unit: wk.unit, given: g, completed: c, note: $("#n").value.trim(), by: user.email, createdAt: serverTimestamp() });
     $("#g").value = ""; $("#c").value = ""; $("#n").value = "";
   } catch (e) { er.textContent = "Save nahi hua: " + e.message; }
 }
@@ -305,18 +460,19 @@ async function saveEntry() {
 async function addWorker() {
   const er = $("#er"); er.textContent = "";
   const name = $("#wn").value.trim(), rate = Number($("#wr").value || 0);
-  if (!name) return er.textContent = "Naam daalein.";
+  if (!name) return er.textContent = "Karigar ka naam daalein.";
   if (rate < 0) return er.textContent = "Rate galat hai.";
+  const id = rid(), works = [{ id, name: $("#wk").value.trim() || "Kaam", unit: $("#wu").value }];
   try {
-    const ref = await addDoc(collection(db, "workers"), { name, unit: $("#wu").value });
-    await setDoc(doc(db, "rates", ref.id), { rate });
-    $("#wn").value = ""; $("#wr").value = "";
+    const ref = await addDoc(collection(db, "workers"), { name, works });
+    await setDoc(doc(db, "rates", ref.id), { map: { [id]: rate } });
+    $("#wn").value = ""; $("#wk").value = ""; $("#wr").value = "";
   } catch (e) { er.textContent = "Save nahi hua: " + e.message; }
 }
 
 async function addPayment() {
   const er = $("#er"); er.textContent = "";
-  const w = workers.find(x => x.id === $("#pw2").value), amt = Number($("#pa").value || 0);
+  const w = workerOf($("#pw2").value), amt = Number($("#pa").value || 0);
   if (!w) return er.textContent = "Karigar chunein.";
   if (!(amt > 0)) return er.textContent = "Amount daalein.";
   try {
