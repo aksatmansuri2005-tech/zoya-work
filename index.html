@@ -54,6 +54,7 @@ th{color:var(--mute);font-weight:800;font-size:14px}
 .sumline{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:17px;font-weight:700;gap:10px}
 .sumline b{text-align:right}
 .tot2{background:#f5ead4;padding:10px;border-radius:8px;margin-top:4px}
+.dayhd{font-weight:800;font-size:18px;margin:14px 0 4px;padding-bottom:4px;border-bottom:2px solid #d9b77f;color:var(--pri)}
 </style>
 </head>
 <body>
@@ -84,10 +85,12 @@ const db = getFirestore(app);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const today = () => { const d = new Date(); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
+const nowT = () => { const d = new Date(); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
 const fmt = n => (Math.round(Number(n || 0) * 100) / 100).toLocaleString("en-IN");
 const money = n => "₹" + fmt(n);
 const sum = (a, k) => a.reduce((t, x) => t + Number(x[k] || 0), 0);
 const rid = () => "w" + Math.random().toString(36).slice(2, 8);
+const normPhone = s => { const d = String(s || "").replace(/\D/g, ""); return d.length === 10 ? "91" + d : d; };
 
 let user = null, isAdmin = false, tab = "entry";
 let workers = [], rates = {}, entries = [], payments = [], unsubs = [];
@@ -210,6 +213,7 @@ function renderTab() {
     m.innerHTML = `
     <div class="card"><h3>Naya entry</h3>
       <label>Tarikh</label><input id="d" type="date" value="${today()}">
+      <label>Time</label><input id="t" type="time" value="${nowT()}">
       <label>Karigar</label><select id="w"></select>
       <label>Kaam / Rate</label><select id="k"></select>
       <div class="row">
@@ -252,6 +256,7 @@ function renderTab() {
     m.innerHTML = `
     <div class="card"><h3>Naya karigar jodein</h3>
       <label>Karigar ka naam</label><input id="wn" type="text">
+      <label>WhatsApp number (10 digit)</label><input id="wph" type="tel" inputmode="numeric" placeholder="9876543210">
       <label>Pehla kaam ka naam (optional)</label><input id="wk" type="text" placeholder="jaise: Cutting">
       <div class="row">
         <div><label>Unit</label><select id="wu">${UNIT_OPTS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></div>
@@ -318,11 +323,19 @@ function statsFor(w) {
   return { rows, earned, paid, bal: earned - paid };
 }
 
+const byDateTime = (a, b) => (b.date || "").localeCompare(a.date || "") || (b.time || "").localeCompare(a.time || "");
 function entryTable(list, withDel) {
   if (!list.length) return `<p class="mute">Abhi koi entry nahi.</p>`;
-  return `<div class="wrap"><table><tr><th>Tarikh</th><th>Karigar</th><th>Kaam</th><th>Diya</th><th>Complete</th><th>Note</th>${withDel ? "<th></th>" : ""}</tr>` +
-    list.map(e => `<tr><td>${esc(e.date)}</td><td>${esc(entryWorker(e))}</td><td>${esc(entryWorkName(e))}</td><td>${fmt(e.given)} ${esc(entryUnit(e))}</td><td>${fmt(e.completed)} ${esc(entryUnit(e))}</td><td>${esc(e.note || "")}<div class="mute">${esc((e.by || "").split("@")[0])}</div></td>${withDel ? `<td><button class="btn sm gray" data-edit="${e.id}">Edit</button> <button class="btn sm red" data-del="${e.id}">X</button></td>` : ""}</tr>`).join("") +
+  return `<div class="wrap"><table><tr><th>Time</th><th>Karigar</th><th>Kaam</th><th>Diya</th><th>Complete</th><th>Note</th>${withDel ? "<th></th>" : ""}</tr>` +
+    [...list].sort(byDateTime).map(e => `<tr><td>${esc(e.time || "-")}</td><td>${esc(entryWorker(e))}</td><td>${esc(entryWorkName(e))}</td><td>${fmt(e.given)} ${esc(entryUnit(e))}</td><td>${fmt(e.completed)} ${esc(entryUnit(e))}</td><td>${esc(e.note || "")}<div class="mute">${esc((e.by || "").split("@")[0])}</div></td>${withDel ? `<td><button class="btn sm gray" data-edit="${e.id}">Edit</button> <button class="btn sm red" data-del="${e.id}">X</button></td>` : ""}</tr>`).join("") +
     `</table></div>`;
+}
+// din-wise: har tarikh ka heading, uske neeche us din ki entries time ke saath
+function entryGroups(list, withDel) {
+  if (!list.length) return `<p class="mute">Abhi koi entry nahi.</p>`;
+  const days = [...new Set([...list].sort(byDateTime).map(e => e.date))];
+  return days.map(d => `<div class="dayhd">${esc(d)} <span class="mute">${esc(new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday: "long" }))}</span></div>` +
+    entryTable(list.filter(x => x.date === d), withDel)).join("");
 }
 
 function bindEntry(root) {
@@ -335,6 +348,7 @@ function bindEntry(root) {
     const fields = [{ k: "date", label: "Tarikh", type: "date", value: e.date }];
     if (w) fields.push({ k: "work", label: "Kaam / Rate", type: "select", value: e.workId || "default", options: worksOf(w).map(x => [x.id, `${x.name} (${unitName(x.unit)})`]) });
     fields.push(
+      { k: "time", label: "Time", type: "time", value: e.time || "" },
       { k: "given", label: "Maal diya", type: "number", value: e.given },
       { k: "completed", label: "Complete hua", type: "number", value: e.completed },
       { k: "note", label: "Note", value: e.note || "" });
@@ -342,7 +356,7 @@ function bindEntry(root) {
       const g = Number(v.given || 0), c = Number(v.completed || 0);
       if (!v.date) throw new Error("Tarikh daalein");
       if (g < 0 || c < 0 || (g === 0 && c === 0)) throw new Error("Maal diya ya complete hua daalein");
-      const upd = { date: v.date, given: g, completed: c, note: v.note.trim() };
+      const upd = { date: v.date, time: v.time || "", given: g, completed: c, note: v.note.trim() };
       if (w && v.work) { const wk = workOf(w, v.work); upd.workId = wk.id; upd.workName = wk.name; upd.unit = wk.unit; }
       await updateDoc(doc(db, "entries", e.id), upd);
     });
@@ -362,7 +376,7 @@ function refresh() {
       let all = { earned: 0, paid: 0, bal: 0 };
       $("#dyn").innerHTML = workers.map(w => {
         const s = statsFor(w); all.earned += s.earned; all.paid += s.paid; all.bal += s.bal;
-        let h = `<div class="card"><h3>${esc(w.name)}</h3>`;
+        let h = `<div class="card"><h3>${esc(w.name)}</h3><div class="mute">${w.phone ? "WhatsApp: +" + esc(w.phone) : "WhatsApp number nahi hai (Karigar tab mein add karein)"}</div>`;
         h += s.rows.map(r => `<div class="kr"><div class="kn">${esc(r.name)} <span class="mute">(${unitName(r.unit)})</span></div>
           <div class="kg">
             <div><small>Diya</small>${fmt(r.given)}</div>
@@ -371,9 +385,11 @@ function refresh() {
             ${isAdmin ? `<div><small>Rate</small>${money(r.rate)}</div><div><small>Kamayi</small>${money(r.earned)}</div><div><small>Is kaam ka payment</small>${money(r.paid)}</div>` : ""}
           </div></div>`).join("");
         if (isAdmin) h += `<div class="sumline"><span>Kul kamayi</span><b>${money(s.earned)}</b></div><div class="sumline"><span>Diya gaya payment</span><b>${money(s.paid)}</b></div><div class="sumline tot2"><span>Baaki payment</span><b class="${s.bal > 0 ? "neg" : "pos"}">${money(s.bal)}</b></div>`;
+        if (isAdmin) h += `<button class="btn" data-wa="${w.id}">WhatsApp par PDF bhejein</button>`;
         return h + `</div>`;
       }).join("") + (isAdmin ? `<div class="card tot"><h3>Sabhi karigar ka total</h3><div class="sumline"><span>Kul kamayi</span><b>${money(all.earned)}</b></div><div class="sumline"><span>Diya gaya</span><b>${money(all.paid)}</b></div><div class="sumline tot2"><span>Baaki payment</span><b>${money(all.bal)}</b></div></div>` : "");
     }
+    $("#dyn").querySelectorAll("[data-wa]").forEach(b => b.onclick = () => sharePdf(b.dataset.wa));
     const d = $("#rd").value;
     const es = entries.filter(e => e.date === d);
     if (!es.length) $("#dyn2").innerHTML = `<p class="mute">${esc(d)} ko koi entry nahi.</p>`;
@@ -395,7 +411,7 @@ function refresh() {
   } else if (tab === "history") {
     opts($("#hf"), true);
     const f = $("#hf").value;
-    $("#dyn").innerHTML = entryTable(entries.filter(e => !f || e.workerId === f), isAdmin);
+    $("#dyn").innerHTML = entryGroups(entries.filter(e => !f || e.workerId === f), isAdmin);
     bindEntry($("#dyn"));
     if (isAdmin && $("#dyn3")) {
       const pl = payments.filter(p => !f || p.workerId === f);
@@ -411,7 +427,7 @@ function refresh() {
     $("#dyn").innerHTML = workers.map(w => `
       <div class="card">
         <div class="hd" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <h3 style="margin:0">${esc(w.name)}</h3>
+          <div><h3 style="margin:0">${esc(w.name)}</h3><div class="mute">${w.phone ? "+" + esc(w.phone) : "number nahi hai"}</div></div>
           <div><button class="btn sm gray" data-wn="${w.id}">Naam</button> <button class="btn sm red" data-wrm="${w.id}">X</button></div>
         </div>
         <div class="wrap"><table><tr><th>Kaam</th><th>Unit</th><th>Rate</th><th></th></tr>
@@ -422,9 +438,9 @@ function refresh() {
     const R = $("#dyn");
     R.querySelectorAll("[data-wn]").forEach(b => b.onclick = () => {
       const w = workerOf(b.dataset.wn);
-      modal("Karigar ka naam", [{ k: "name", label: "Naam", value: w.name }], async v => {
+      modal("Karigar ka naam / number", [{ k: "name", label: "Naam", value: w.name }, { k: "phone", label: "WhatsApp number (10 digit)", type: "tel", value: w.phone ? w.phone.slice(-10) : "" }], async v => {
         if (!v.name.trim()) throw new Error("Naam daalein");
-        await updateDoc(doc(db, "workers", w.id), { name: v.name.trim() });
+        await updateDoc(doc(db, "workers", w.id), { name: v.name.trim(), phone: normPhone(v.phone) });
       });
     });
     R.querySelectorAll("[data-wrm]").forEach(b => b.onclick = async () => {
@@ -623,6 +639,54 @@ async function exportPdf() {
     doc.save(fname(x.ym, $("#xw").value) + ".pdf");
   } catch (e) { $("#xe").textContent = e.message; }
 }
+function buildWorkerPdf(r, ym) {
+  const doc = new window.jspdf.jsPDF({ unit: "pt", format: "a4" });
+  const rs = n => "Rs. " + fmt(n), W = doc.internal.pageSize.getWidth();
+  const style = { theme: "grid", styles: { fontSize: 9, cellPadding: 4 }, headStyles: { fillColor: [122, 74, 36] }, margin: { left: 40, right: 40 } };
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(122, 74, 36); doc.text("Zoya Crystal and Export", 40, 44);
+  doc.setFontSize(13); doc.setTextColor(30, 30, 30); doc.text("Karigar: " + r.w.name, 40, 66);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(100, 100, 100);
+  doc.text("Monthly hisaab: " + monthLabel(ym) + (r.w.phone ? "   |   Mobile: +" + r.w.phone : ""), 40, 82);
+  let y = 96;
+  doc.autoTable({ ...style, startY: y, head: [["Kaam", "Unit", "Diya", "Complete", "Baaki", "Rate", "Kamayi"]],
+    body: r.rows.map(k => [k.name, k.unit, fmt(k.given), fmt(k.done), fmt(k.left), rs(k.rate), rs(k.earned)]) });
+  y = doc.lastAutoTable.finalY + 18;
+  doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(30, 30, 30); doc.text("Din-wise entries", 40, y);
+  doc.autoTable({ ...style, startY: y + 6, head: [["Tarikh", "Kaam", "Diya", "Complete", "Kamayi", "Note"]],
+    body: r.days.map(d => [d.date, d.work, fmt(d.given) + " " + d.unit, fmt(d.done) + " " + d.unit, rs(d.earned), d.note]) });
+  y = doc.lastAutoTable.finalY + 18;
+  if (r.payM.length) {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.text("Payment", 40, y);
+    doc.autoTable({ ...style, startY: y + 6, head: [["Tarikh", "Kaam", "Amount", "Note"]], body: r.payM.map(p => [p.date, p.workName || "General", rs(p.amount), p.note || ""]) });
+    y = doc.lastAutoTable.finalY + 18;
+  }
+  doc.autoTable({ ...style, startY: y, theme: "plain", styles: { fontSize: 11, fontStyle: "bold" }, margin: { left: W - 300, right: 40 },
+    body: [["Pichhla baaki", rs(r.prev)], ["Is mahine ki kamayi", rs(r.earned)], ["Is mahine ka payment", rs(r.paid)], ["Kul baaki", rs(r.total)]], columnStyles: { 1: { halign: "right" } } });
+  return doc;
+}
+
+async function sharePdf(id) {
+  const ym = $("#xm").value;
+  const w = workerOf(id);
+  if (!w) return;
+  if (!ym) return alert("Upar Monthly download mein mahina chunein.");
+  const r = monthReport(w, ym);
+  if (!r.days.length && !r.payM.length) return alert("Is mahine " + w.name + " ki koi entry nahi hai.");
+  try {
+    await loadScript(JSPDF_URL); await loadScript(AUTOTABLE_URL);
+    const doc = buildWorkerPdf(r, ym);
+    const fileName = fname(ym, id) + ".pdf";
+    const file = new File([doc.output("blob")], fileName, { type: "application/pdf" });
+    const text = `Zoya Crystal and Export - ${w.name}, ${monthLabel(ym)} ka hisaab`;
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: fileName, text });
+      return;
+    }
+    doc.save(fileName);
+    if (w.phone) window.open(`https://wa.me/${w.phone}?text=${encodeURIComponent(text + ". PDF attach karein.")}`, "_blank");
+    else alert("PDF download ho gayi. Karigar ka WhatsApp number Karigar tab mein add karein.");
+  } catch (e) { if (e.name !== "AbortError") alert("PDF nahi bana: " + e.message); }
+}
 /* ---- /export ---- */
 
 async function saveEntry() {
@@ -633,24 +697,24 @@ async function saveEntry() {
   if (!$("#d").value) return er.textContent = "Tarikh chunein.";
   if (g < 0 || c < 0 || pay < 0) return er.textContent = "Sahi number daalein.";
   if (g === 0 && c === 0 && pay === 0) return er.textContent = "Maal diya, complete hua ya payment, kuch to daalein.";
-  const base = { date: $("#d").value, workerId: w.id, workerName: w.name, workId: wk.id, workName: wk.name, by: user.email, createdAt: serverTimestamp() };
+  const base = { date: $("#d").value, time: $("#t")?.value || "", workerId: w.id, workerName: w.name, workId: wk.id, workName: wk.name, by: user.email, createdAt: serverTimestamp() };
   try {
     if (g > 0 || c > 0) await addDoc(collection(db, "entries"), { ...base, unit: wk.unit, given: g, completed: c, note: $("#n").value.trim() });
     if (pay > 0) await addDoc(collection(db, "payments"), { ...base, amount: pay, note: $("#n").value.trim() || "Payment" });
-    $("#g").value = ""; $("#c").value = ""; $("#n").value = ""; if ($("#pay")) $("#pay").value = "";
+    $("#g").value = ""; $("#c").value = ""; $("#n").value = ""; if ($("#pay")) $("#pay").value = ""; if ($("#t")) $("#t").value = nowT();
   } catch (e) { er.textContent = "Save nahi hua: " + e.message; }
 }
 
 async function addWorker() {
   const er = $("#er"); er.textContent = "";
-  const name = $("#wn").value.trim(), rate = Number($("#wr").value || 0);
+  const name = $("#wn").value.trim(), rate = Number($("#wr").value || 0), phone = normPhone($("#wph").value);
   if (!name) return er.textContent = "Karigar ka naam daalein.";
   if (rate < 0) return er.textContent = "Rate galat hai.";
   const id = rid(), works = [{ id, name: $("#wk").value.trim() || "Kaam", unit: $("#wu").value }];
   try {
-    const ref = await addDoc(collection(db, "workers"), { name, works });
+    const ref = await addDoc(collection(db, "workers"), { name, phone, works });
     await setDoc(doc(db, "rates", ref.id), { map: { [id]: rate } });
-    $("#wn").value = ""; $("#wk").value = ""; $("#wr").value = "";
+    $("#wn").value = ""; $("#wk").value = ""; $("#wr").value = ""; $("#wph").value = "";
   } catch (e) { er.textContent = "Save nahi hua: " + e.message; }
 }
 
